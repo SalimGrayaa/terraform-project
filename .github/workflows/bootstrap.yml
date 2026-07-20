@@ -1,0 +1,75 @@
+name: AWS K8s Lab - S3 Bucket Creation
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket_name:
+        description: 'S3 Bucket Name'
+        required: true
+        type: string
+      region:
+        description: 'AWS Region'
+        required: false
+        default: 'us-east-1'
+        type: string
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  AWS_REGION: ${{ inputs.region || 'us-east-1' }}
+  TERRAFORM_DIR: ./bootstrap
+
+jobs:
+  bootstrap:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: latest
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ env.TERRAFORM_DIR }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ env.TERRAFORM_DIR }}
+
+      - name: Terraform Plan
+        run: terraform plan -var="bucket_name=${{ inputs.bucket_name }}" -var="region=${{ env.AWS_REGION }}" -out=tfplan
+        working-directory: ${{ env.TERRAFORM_DIR }}
+
+      - name: Terraform Apply
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform apply -auto-approve tfplan
+        working-directory: ${{ env.TERRAFORM_DIR }}
+
+      - name: Terraform Destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: terraform destroy -var="bucket_name=${{ inputs.bucket_name }}" -var="region=${{ env.AWS_REGION }}" -auto-approve
+        working-directory: ${{ env.TERRAFORM_DIR }}
+
+      - name: Output S3 Bucket Name
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform output state_bucket_name
+        working-directory: ${{ env.TERRAFORM_DIR }}
