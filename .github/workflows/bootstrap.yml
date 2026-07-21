@@ -12,19 +12,10 @@ on:
         required: false
         default: 'us-east-1'
         type: string
-      action:
-        description: 'Terraform action to perform'
-        required: true
-        default: 'apply'
-        type: choice
-        options:
-          - plan
-          - apply
-          - destroy
+
 
 env:
   AWS_REGION: ${{ inputs.region || 'us-east-1' }}
-  TERRAFORM_DIR: ./bootstrap
 
 jobs:
   bootstrap:
@@ -33,7 +24,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.2
@@ -47,29 +38,35 @@ jobs:
         with:
           terraform_version: latest
 
-      - name: Terraform Init
-        run: terraform init
-        working-directory: ${{ env.TERRAFORM_DIR }}
+      - name: Create S3 Bucket with AWS CLI with enabled versioning
+        run: |
+          aws s3api create-bucket --bucket ${{ inputs.bucket_name }} --region ${{ env.AWS_REGION }}
+          aws s3api put-bucket-versioning --bucket ${{ inputs.bucket_name }} --versioning-configuration Status=Enabled
+      - name: Verify S3 Bucket Creation
+        run: |
+          aws s3api list-buckets --query "Buckets[?Name=='${{ inputs.bucket_name }}'].Name" --output text || { echo "Bucket does not exist"; exit 1; }
+          echo "Bucket ${{ inputs.bucket_name }} created successfully in region ${{ env.AWS_REGION }}."
 
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: ${{ env.TERRAFORM_DIR }}
+      - name: Post-Build Cleanup (Ensure S3 Bucket is Deleted)
+        if: ${{ always() }}
+        run: |
+          echo "Checking if bucket ${{ inputs.bucket_name }} exists..."
+          if [ "$(aws s3api list-buckets --query "Buckets[?Name=='${{ inputs.bucket_name }}'].Name" --output text)" = "${{ inputs.bucket_name }}" ]; then
+            echo "Bucket exists. Initiating removal..."
+            
+            # Since versioning is enabled, we must delete all object versions and delete markers first
+            echo "Removing all object versions and delete markers..."
+            aws s3api delete-objects --bucket "${{ inputs.bucket_name }}" \
+              --delete "$(aws s3api list-object-versions --bucket "${{ inputs.bucket_name }}" \
+              --query '{Objects: Versions[].{Key: Key, VersionId: VersionId}}' --output json)" 2>/dev/null || true
+              
+            aws s3api delete-objects --bucket "${{ inputs.bucket_name }}" \
+              --delete "$(aws s3api list-object-versions --bucket "${{ inputs.bucket_name }}" \
+              --query '{Objects: DeleteMarkers[].{Key: Key, VersionId: VersionId}}' --output json)" 2>/dev/null || true
 
-      - name: Terraform Plan
-        run: terraform plan -var="bucket_name=${{ inputs.bucket_name }}" -var="region=${{ env.AWS_REGION }}" -out=tfplan
-        working-directory: ${{ env.TERRAFORM_DIR }}
-
-      - name: Terraform Apply
-        if: ${{ inputs.action == 'apply' }}
-        run: terraform apply -auto-approve tfplan
-        working-directory: ${{ env.TERRAFORM_DIR }}
-
-      - name: Terraform Destroy
-        if: ${{ inputs.action == 'destroy' }}
-        run: terraform destroy -var="bucket_name=${{ inputs.bucket_name }}" -var="region=${{ env.AWS_REGION }}" -auto-approve
-        working-directory: ${{ env.TERRAFORM_DIR }}
-
-      - name: Output S3 Bucket Name
-        if: ${{ inputs.action == 'apply' }}
-        run: terraform output state_bucket_name
-        working-directory: ${{ env.TERRAFORM_DIR }}
+            # Delete the empty bucket
+            aws s3api delete-bucket --bucket ${{ inputs.bucket_name }} --region ${{ env.AWS_REGION }}
+            echo "Bucket ${{ inputs.bucket_name }} deleted successfully."
+          else
+            echo "Bucket does not exist or was already deleted. Skipping."
+          fi
