@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: ./application
     env:
-      TF_VAR_region: ${{ env.AWS_REGION }}
+      TF_VAR_region: ${{ inputs.region || 'us-east-1' }}
       TF_VAR_bucket_name: ${{ inputs.bucket_name }}
     steps:
       - name: Checkout code
@@ -44,7 +44,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ inputs.region || 'us-east-1' }}
           terraform-version: latest
 
       - name: Terraform Format Check
@@ -57,10 +57,10 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ inputs.bucket_name }}" \
             -backend-config="key=terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}"
+            -backend-config="region=${{ inputs.region || 'us-east-1' }}"
 
       - name: Terraform Plan
-        run: terraform plan -out=tfplan -var="region=${{ env.AWS_REGION }}" -var="bucket_name=${{ inputs.bucket_name }}"
+        run: terraform plan -out=tfplan -var="region=${{ inputs.region || 'us-east-1' }}" -var="bucket_name=${{ inputs.bucket_name }}"
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
