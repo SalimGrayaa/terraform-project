@@ -1,7 +1,7 @@
-name: AWS K8s Lab - S3 Bucket Creation
+name: AWS K8s Lab - Bootstrap
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       bucket_name:
         description: 'S3 Bucket Name'
@@ -13,60 +13,44 @@ on:
         default: 'us-east-1'
         type: string
 
-
 env:
   AWS_REGION: ${{ inputs.region || 'us-east-1' }}
+
+concurrency:
+  group: terraform-bootstrap-${{ inputs.bucket_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.2
+      - name: Run Common Project Initialization
+        uses: ./.github/actions/x-common-steps
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4.0.1
-        with:
-          terraform_version: latest
+          terraform-version: latest
 
       - name: Create S3 Bucket with AWS CLI with enabled versioning
         run: |
-          aws s3api create-bucket --bucket ${{ inputs.bucket_name }} --region ${{ env.AWS_REGION }}
-          aws s3api put-bucket-versioning --bucket ${{ inputs.bucket_name }} --versioning-configuration Status=Enabled
+          if aws s3api head-bucket --bucket "${{ inputs.bucket_name }}" --region "${{ env.AWS_REGION }}" 2>/dev/null; then
+            echo "Bucket already exists. Continuing."
+          else
+            aws s3api create-bucket --bucket "${{ inputs.bucket_name }}" --region "${{ env.AWS_REGION }}"
+          fi
+          aws s3api put-bucket-versioning --bucket "${{ inputs.bucket_name }}" --versioning-configuration Status=Enabled
+
       - name: Verify S3 Bucket Creation
         run: |
           aws s3api list-buckets --query "Buckets[?Name=='${{ inputs.bucket_name }}'].Name" --output text || { echo "Bucket does not exist"; exit 1; }
           echo "Bucket ${{ inputs.bucket_name }} created successfully in region ${{ env.AWS_REGION }}."
-
-      - name: Post-Build Cleanup (Ensure S3 Bucket is Deleted)
-        if: ${{ always() }}
-        run: |
-          echo "Checking if bucket ${{ inputs.bucket_name }} exists..."
-          if [ "$(aws s3api list-buckets --query "Buckets[?Name=='${{ inputs.bucket_name }}'].Name" --output text)" = "${{ inputs.bucket_name }}" ]; then
-            echo "Bucket exists. Initiating removal..."
-            
-            # Since versioning is enabled, we must delete all object versions and delete markers first
-            echo "Removing all object versions and delete markers..."
-            aws s3api delete-objects --bucket "${{ inputs.bucket_name }}" \
-              --delete "$(aws s3api list-object-versions --bucket "${{ inputs.bucket_name }}" \
-              --query '{Objects: Versions[].{Key: Key, VersionId: VersionId}}' --output json)" 2>/dev/null || true
-              
-            aws s3api delete-objects --bucket "${{ inputs.bucket_name }}" \
-              --delete "$(aws s3api list-object-versions --bucket "${{ inputs.bucket_name }}" \
-              --query '{Objects: DeleteMarkers[].{Key: Key, VersionId: VersionId}}' --output json)" 2>/dev/null || true
-
-            # Delete the empty bucket
-            aws s3api delete-bucket --bucket ${{ inputs.bucket_name }} --region ${{ env.AWS_REGION }}
-            echo "Bucket ${{ inputs.bucket_name }} deleted successfully."
-          else
-            echo "Bucket does not exist or was already deleted. Skipping."
-          fi

@@ -1,0 +1,30 @@
+name: AWS K8s Lab - Main Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket_name:
+        description: 'S3 Bucket Name'
+        required: true
+        type: string
+      region:
+        description: 'AWS Region'
+        required: false
+        default: 'us-east-1'
+        type: string
+
+jobs:
+  bootstrap:
+    uses: ./.github/workflows/bootstrap.yml
+    with:
+      bucket_name: ${{ inputs.bucket_name }}
+      region: ${{ inputs.region }}
+    secrets: inherit
+
+  deploy:
+    needs: bootstrap
+    uses: ./.github/workflows/deploy.yml
+    with:
+      bucket_name: ${{ inputs.bucket_name }}
+      region: ${{ inputs.region }}
+    secrets: inherit

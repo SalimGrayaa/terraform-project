@@ -1,0 +1,32 @@
+name: 'Execute Common Setup Steps'
+description: 'Configures AWS credentials and Terraform for the workflow'
+
+inputs:
+  aws-access-key-id:
+    description: 'AWS access key ID'
+    required: true
+  aws-secret-access-key:
+    description: 'AWS secret access key'
+    required: true
+  aws-region:
+    description: 'AWS region'
+    required: true
+  terraform-version:
+    description: 'Terraform version to install'
+    required: false
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v6.2.2
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4.0.1
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
