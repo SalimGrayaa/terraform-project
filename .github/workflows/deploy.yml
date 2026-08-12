@@ -64,3 +64,7 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
+
+      - name: Destroy Terraform Resources on Failure
+        if: ${{ failure() }}
+        run: terraform destroy -auto-approve -var="region=${{ inputs.region || 'us-east-1' }}" -var="bucket_name=${{ inputs.bucket_name }}"

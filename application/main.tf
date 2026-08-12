@@ -27,7 +27,7 @@ resource "aws_internet_gateway" "public_igw" {
   })
 }
 
-resource "aws_internet_gateway_attachment" "example" {
+resource "aws_internet_gateway_attachment" "igw_attachment" {
   internet_gateway_id = aws_internet_gateway.public_igw.id
   vpc_id              = aws_vpc.public_vpc.id
 }
