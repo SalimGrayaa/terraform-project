@@ -101,12 +101,29 @@ data "aws_ami" "ubuntu" {
   }
 }
 
+resource "tls_private_key" "rsa-key-4096" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "deployer_key" {
+  key_name   = "deployer-key"
+  public_key = tls_private_key.rsa-key-4096.public_key_openssh
+}
+
+resource "local_file" "private_key" {
+  content         = tls_private_key.rsa-key-4096.private_key_pem
+  filename        = "${path.module}/deployer-key.pem"
+  file_permission = "0600"
+}
+
 resource "aws_instance" "public_instance" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.web.id]
+  key_name                    = aws_key_pair.deployer_key.key_name
 
   tags = merge(local.common_tags, {
     Name = "app-public-instance"

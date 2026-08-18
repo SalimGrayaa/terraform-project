@@ -45,7 +45,7 @@ variable "subnet_cidr" {
 variable "instance_type" {
   type        = string
   description = "EC2 instance type to deploy"
-  default     = "t2.micro"
+  default     = "t3.medium"
 
   validation {
     condition     = length(var.instance_type) > 0

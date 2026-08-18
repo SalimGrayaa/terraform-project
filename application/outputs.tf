@@ -17,3 +17,9 @@ output "instance_public_ip" {
   description = "The public IP address of the EC2 instance"
   value       = aws_instance.public_instance.public_ip
 }
+
+output "key_path" {
+  description = "The private key for the EC2 instance"
+  value       = local_file.private_key.filename
+  sensitive   = true
+}
