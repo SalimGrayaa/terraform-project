@@ -65,6 +65,55 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
       
+      - name: Setup Control Plane Instance
+        run: |
+          private_dns=$(terraform output -raw k8s_control_plane_instance_hostname)
+          control_plane_public_ip=$(terraform output -raw k8s_control_plane_instance_public_ip)
+          key_path=$(terraform output -raw key_path)
+
+          echo "Waiting for SSH on ${control_plane_public_ip} (timeout 5m)"
+          timeout=300
+          interval=10
+          elapsed=0
+          until ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_path" ubuntu@${control_plane_public_ip} 'echo ssh-ok' &>/dev/null; do
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "Timed out waiting for SSH on ${control_plane_public_ip}" >&2
+              exit 1
+            fi
+            sleep $interval
+            elapsed=$((elapsed + interval))
+            echo "Retrying SSH... elapsed ${elapsed}s"
+          done
+
+          scp -o StrictHostKeyChecking=no -i "$key_path" scripts/setup_cp.sh ubuntu@${control_plane_public_ip}:/home/ubuntu/setup_k8s_control_plane.sh
+          ssh -o StrictHostKeyChecking=no -i "$key_path" ubuntu@${control_plane_public_ip} \
+            "sudo /bin/bash /home/ubuntu/setup_k8s_control_plane.sh '${private_dns}' && sudo rm -f /home/ubuntu/setup_k8s_control_plane.sh"
+
+      - name: Join Kubernetes Workers
+        run: |
+          control_plane_public_ip=$(terraform output -raw k8s_control_plane_instance_public_ip)
+          worker_1_public_ip=$(terraform output -raw k8s_worker_1_instance_public_ip)
+          worker_2_public_ip=$(terraform output -raw k8s_worker_2_instance_public_ip)
+          key_path=$(terraform output -raw key_path)
+          join_command=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i "$key_path" ubuntu@${control_plane_public_ip} \
+            'sudo kubeadm token create --print-join-command')
+
+          for worker_public_ip in "$worker_1_public_ip" "$worker_2_public_ip"; do
+            echo "Waiting for SSH on ${worker_public_ip} (timeout 5m)"
+            timeout=300
+            interval=10
+            elapsed=0
+            until ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_path" ubuntu@${worker_public_ip} 'echo ssh-ok' &>/dev/null; do
+              if [ "$elapsed" -ge "$timeout" ]; then
+                echo "Timed out waiting for SSH on ${worker_public_ip}" >&2
+                exit 1
+              fi
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+
+            ssh -o StrictHostKeyChecking=no -i "$key_path" ubuntu@${worker_public_ip} "sudo ${join_command}"
+          done
       # - name: install k8s tools ( kubelet, kubeadm and kubectl) in the Public EC2 instance
       #   env:
       #     DEBIAN_FRONTEND: noninteractive
