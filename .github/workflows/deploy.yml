@@ -65,34 +65,34 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
       
-      - name: install k8s tools ( kubelet, kubeadm and kubectl) in the Public EC2 instance
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          instance_public_ip=$(terraform output -raw instance_public_ip)
-          key_path=$(terraform output -raw key_path)
+      # - name: install k8s tools ( kubelet, kubeadm and kubectl) in the Public EC2 instance
+      #   env:
+      #     DEBIAN_FRONTEND: noninteractive
+      #   run: |
+      #     instance_public_ip=$(terraform output -raw instance_public_ip)
+      #     key_path=$(terraform output -raw key_path)
 
-          echo "Waiting for SSH on ${instance_public_ip} (timeout 5m)"
-          timeout=300
-          interval=10
-          elapsed=0
-          until ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_path" ubuntu@${instance_public_ip} 'echo ssh-ok' &>/dev/null; do
-            if [ "$elapsed" -ge "$timeout" ]; then
-              echo "Timed out waiting for SSH on ${instance_public_ip}" >&2
-              exit 1
-            fi
-            sleep $interval
-            elapsed=$((elapsed + interval))
-            echo "Retrying SSH... elapsed ${elapsed}s"
-          done
+      #     echo "Waiting for SSH on ${instance_public_ip} (timeout 5m)"
+      #     timeout=300
+      #     interval=10
+      #     elapsed=0
+      #     until ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_path" ubuntu@${instance_public_ip} 'echo ssh-ok' &>/dev/null; do
+      #       if [ "$elapsed" -ge "$timeout" ]; then
+      #         echo "Timed out waiting for SSH on ${instance_public_ip}" >&2
+      #         exit 1
+      #       fi
+      #       sleep $interval
+      #       elapsed=$((elapsed + interval))
+      #       echo "Retrying SSH... elapsed ${elapsed}s"
+      #     done
 
-          scp -o StrictHostKeyChecking=no -i "$key_path" scripts/install_kubectl.sh ubuntu@${instance_public_ip}:/home/ubuntu/install_kubectl.sh
-          ssh -o StrictHostKeyChecking=no -i "$key_path" ubuntu@${instance_public_ip} "/bin/bash /home/ubuntu/install_kubectl.sh && rm -f /home/ubuntu/install_kubectl.sh"
-      - name: Create AMI Image from the Public EC2 instance
-        run: |
-          instance_id=$(terraform output -raw instance_id)
-          image_name="k8s-ami-$(date +%Y%m%d%H%M%S)"
-          aws ec2 create-image --instance-id "$instance_id" --name "$image_name" --no-reboot
+      #     scp -o StrictHostKeyChecking=no -i "$key_path" scripts/install_kubectl.sh ubuntu@${instance_public_ip}:/home/ubuntu/install_kubectl.sh
+      #     ssh -o StrictHostKeyChecking=no -i "$key_path" ubuntu@${instance_public_ip} "/bin/bash /home/ubuntu/install_kubectl.sh && rm -f /home/ubuntu/install_kubectl.sh"
+      # - name: Create AMI Image from the Public EC2 instance
+      #   run: |
+      #     instance_id=$(terraform output -raw instance_id)
+      #     image_name="k8s-ami-$(date +%Y%m%d%H%M%S)"
+      #     aws ec2 create-image --instance-id "$instance_id" --name "$image_name" --no-reboot
 
       - name: Destroy Terraform Resources on Failure
         if: ${{ failure() }}

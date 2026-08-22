@@ -99,21 +99,26 @@ data "aws_ami" "ubuntu" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
 }
 
-resource "tls_private_key" "rsa-key-4096" {
+resource "tls_private_key" "rsa_key_4096" {
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
 resource "aws_key_pair" "deployer_key" {
   key_name   = "deployer-key"
-  public_key = tls_private_key.rsa-key-4096.public_key_openssh
+  public_key = tls_private_key.rsa_key_4096.public_key_openssh
 }
 
 resource "local_file" "private_key" {
-  content         = tls_private_key.rsa-key-4096.private_key_pem
-  filename        = "${path.module}/deployer-key.pem"
+  content         = tls_private_key.rsa_key_4096.private_key_pem
+  filename        = "${path.root}/deployer-key.pem"
   file_permission = "0600"
 }
 
@@ -124,8 +129,86 @@ resource "aws_instance" "public_instance" {
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.web.id]
   key_name                    = aws_key_pair.deployer_key.key_name
+  provisioner "remote-exec" {
+    inline = [
+      "mkdir -p /home/ubuntu/scripts",
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.rsa_key_4096.private_key_pem
+      host        = self.public_ip
+    }
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/install_k8s_tools.sh"
+    destination = "/home/ubuntu/scripts/install_k8s_tools.sh"
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.rsa_key_4096.private_key_pem
+      host        = self.public_ip
+    }
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "sudo /bin/bash /home/ubuntu/scripts/install_k8s_tools.sh",
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = tls_private_key.rsa_key_4096.private_key_pem
+      host        = self.public_ip
+    }
+  }
 
   tags = merge(local.common_tags, {
     Name = "app-public-instance"
+  })
+}
+
+resource "aws_ami_from_instance" "k8s_ami" {
+  name               = "k8s_ami"
+  source_instance_id = aws_instance.public_instance.id
+}
+
+resource "aws_instance" "app-k8s-control-plane" {
+  ami                         = aws_ami_from_instance.k8s_ami.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public_subnet.id
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  key_name                    = aws_key_pair.deployer_key.key_name
+
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-control-plane"
+  })
+}
+resource "aws_instance" "app-k8s-worker-1" {
+  ami                         = aws_ami_from_instance.k8s_ami.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public_subnet.id
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  key_name                    = aws_key_pair.deployer_key.key_name
+
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-worker-1"
+  })
+}
+resource "aws_instance" "app-k8s-worker-2" {
+  ami                         = aws_ami_from_instance.k8s_ami.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public_subnet.id
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  key_name                    = aws_key_pair.deployer_key.key_name
+
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-worker-2"
   })
 }
