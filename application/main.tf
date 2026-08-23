@@ -47,45 +47,104 @@ resource "aws_route_table_association" "public_route_table_association" {
   route_table_id = aws_route_table.public_route_table.id
 }
 
-resource "aws_security_group" "web" {
-  name        = "app-web-sg"
+resource "aws_security_group" "cp_sg" {
+  name        = "app-k8s-control-plane-sg"
+  description = "Control plane security group"
+  vpc_id      = aws_vpc.public_vpc.id
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-control-plane-sg"
+  })
+}
+resource "aws_security_group" "worker_node_sg" {
+  name        = "app-k8s-worker-sg"
+  description = "Worker nodes security group"
+  vpc_id      = aws_vpc.public_vpc.id
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-worker-sg"
+  })
+}
+resource "aws_security_group" "allow_ssh" {
+  name        = "allow ssh"
   description = "Allow inbound HTTP/HTTPS and SSH"
   vpc_id      = aws_vpc.public_vpc.id
-
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = merge(local.common_tags, {
-    Name = "app-web-sg"
+    Name = "app-ssh-sg"
   })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ssh_rule" {
+  security_group_id = aws_security_group.allow_ssh.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 22
+  to_port           = 22
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "cp-api-server-rule" {
+  security_group_id            = aws_security_group.cp_sg.id
+  referenced_security_group_id = aws_security_group.cp_sg.id
+  from_port                    = 6443
+  to_port                      = 6443
+  ip_protocol                  = "tcp"
+}
+resource "aws_vpc_security_group_ingress_rule" "worker_api_server" {
+  security_group_id            = aws_security_group.cp_sg.id
+  referenced_security_group_id = aws_security_group.worker_node_sg.id
+  from_port                    = 6443
+  to_port                      = 6443
+  ip_protocol                  = "tcp"
+}
+resource "aws_vpc_security_group_ingress_rule" "cp-kubelet-rule" {
+  security_group_id            = aws_security_group.cp_sg.id
+  referenced_security_group_id = aws_security_group.worker_node_sg.id
+  from_port                    = 10250
+  to_port                      = 10250
+  ip_protocol                  = "tcp"
+}
+resource "aws_vpc_security_group_ingress_rule" "cp-etcd-rule" {
+  security_group_id            = aws_security_group.cp_sg.id
+  referenced_security_group_id = aws_security_group.cp_sg.id
+  from_port                    = 2379
+  to_port                      = 2379
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "worker-kubelet-rule" {
+  security_group_id            = aws_security_group.worker_node_sg.id
+  referenced_security_group_id = aws_security_group.cp_sg.id
+  from_port                    = 10250
+  to_port                      = 10250
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "cp_cilium_vxlan" {
+  security_group_id            = aws_security_group.cp_sg.id
+  referenced_security_group_id = aws_security_group.worker_node_sg.id
+  from_port                    = 8472
+  to_port                      = 8472
+  ip_protocol                  = "udp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "worker_cilium_vxlan" {
+  security_group_id            = aws_security_group.worker_node_sg.id
+  referenced_security_group_id = aws_security_group.cp_sg.id
+  from_port                    = 8472
+  to_port                      = 8472
+  ip_protocol                  = "udp"
+}
+resource "aws_vpc_security_group_ingress_rule" "worker_cilium_vxlan_self" {
+  security_group_id            = aws_security_group.worker_node_sg.id
+  referenced_security_group_id = aws_security_group.worker_node_sg.id
+  from_port                    = 8472
+  to_port                      = 8472
+  ip_protocol                  = "udp"
+}
+resource "aws_vpc_security_group_ingress_rule" "worker_cilium_health" {
+  security_group_id            = aws_security_group.worker_node_sg.id
+  referenced_security_group_id = aws_security_group.worker_node_sg.id
+  from_port                    = 4240
+  to_port                      = 4240
+  ip_protocol                  = "tcp"
 }
 
 data "aws_ami" "ubuntu" {
@@ -129,7 +188,7 @@ resource "aws_instance" "public_instance" {
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.web.id]
+  vpc_security_group_ids      = [aws_security_group.allow_ssh.id]
   key_name                    = aws_key_pair.deployer_key.key_name
   provisioner "remote-exec" {
     inline = [
@@ -183,7 +242,7 @@ resource "aws_instance" "app-k8s-control-plane" {
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.web.id]
+  vpc_security_group_ids      = [aws_security_group.cp_sg.id, aws_security_group.allow_ssh.id]
   key_name                    = aws_key_pair.deployer_key.key_name
 
   tags = merge(local.common_tags, {
@@ -195,7 +254,7 @@ resource "aws_instance" "app-k8s-worker-1" {
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.web.id]
+  vpc_security_group_ids      = [aws_security_group.worker_node_sg.id, aws_security_group.allow_ssh.id]
   key_name                    = aws_key_pair.deployer_key.key_name
 
   tags = merge(local.common_tags, {
@@ -207,7 +266,7 @@ resource "aws_instance" "app-k8s-worker-2" {
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.web.id]
+  vpc_security_group_ids      = [aws_security_group.worker_node_sg.id, aws_security_group.allow_ssh.id]
   key_name                    = aws_key_pair.deployer_key.key_name
 
   tags = merge(local.common_tags, {
