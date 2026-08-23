@@ -52,3 +52,88 @@ jobs:
         run: |
           aws s3api list-buckets --query "Buckets[?Name=='${{ inputs.bucket_name }}'].Name" --output text || { echo "Bucket does not exist"; exit 1; }
           echo "Bucket ${{ inputs.bucket_name }} created successfully in region ${{ inputs.region || 'us-east-1' }}."
+
+      - name: Build Kubernetes Tools AMI
+        shell: bash
+        run: |
+          set -e
+
+          region="${{ inputs.region || 'us-east-1' }}"
+          run_suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          key_name="k8s-ami-bootstrap-key-${run_suffix}"
+          instance_name="k8s-ami-bootstrap-${run_suffix}"
+          ami_name="k8s-tools-ubuntu-24-04-${run_suffix}"
+          key_path="${key_name}.pem"
+          instance_id=""
+          security_group_id=""
+
+          existing_ami_id=$(aws ec2 describe-images --region "$region" --owners self \
+            --filters "Name=name,Values=k8s-tools-ubuntu-24-04-*" Name=state,Values=available \
+            --query 'Images[-1].ImageId' --output text)
+          if [ -n "$existing_ami_id" ] && [ "$existing_ami_id" != "None" ]; then
+            echo "Kubernetes tools AMI already exists: ${existing_ami_id}"
+            exit 0
+          fi
+
+          aws ec2 create-key-pair --region "$region" --key-name "$key_name" \
+            --query KeyMaterial --output text > "$key_path"
+          chmod 600 "$key_path"
+          security_group_id=$(aws ec2 create-security-group --region "$region" \
+            --group-name "k8s-ami-bootstrap-sg-${run_suffix}" \
+            --description "Temporary SSH access for Kubernetes tools AMI build" \
+            --query GroupId --output text)
+          aws ec2 authorize-security-group-ingress --region "$region" \
+            --group-id "$security_group_id" --protocol tcp --port 22 --cidr 0.0.0.0/0
+
+          image_id=$(aws ec2 describe-images --owners 099720109477  --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-*"  --query "Images[0].ImageId"  --output text)
+
+          instance_id=$(aws ec2 run-instances --region "$region" \
+            --image-id "$image_id" \
+            --instance-type t3.medium \
+            --key-name "$key_name" \
+            --security-group-ids "$security_group_id" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${instance_name}}]" \
+            --query 'Instances[0].InstanceId' --output text)
+
+          aws ec2 wait instance-running --region "$region" --instance-ids "$instance_id"
+          aws ec2 wait instance-status-ok --region "$region" --instance-ids "$instance_id"
+
+          instance_public_ip=$(aws ec2 describe-instances --region "$region" --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+
+          echo "Waiting for SSH on ${instance_public_ip} (timeout 5m)"
+          timeout=300
+          interval=10
+          elapsed=0
+          until ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+            -i "$key_path" ubuntu@"$instance_public_ip" 'echo ssh-ok' &>/dev/null; do
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "Timed out waiting for SSH on ${instance_public_ip}" >&2
+              exit 1
+            fi
+            sleep "$interval"
+            elapsed=$((elapsed + interval))
+          done
+
+          scp -o StrictHostKeyChecking=no -i "$key_path" \
+            application/scripts/install_k8s_tools.sh \
+            ubuntu@"$instance_public_ip":/home/ubuntu/install_k8s_tools.sh
+          ssh -o StrictHostKeyChecking=no -i "$key_path" ubuntu@"$instance_public_ip" \
+            'sudo /bin/bash /home/ubuntu/install_k8s_tools.sh && sudo rm -f /home/ubuntu/install_k8s_tools.sh'
+
+          aws ec2 stop-instances --region "$region" --instance-ids "$instance_id" >/dev/null
+          aws ec2 wait instance-stopped --region "$region" --instance-ids "$instance_id"
+          ami_id=$(aws ec2 create-image --region "$region" --instance-id "$instance_id" \
+            --name "$ami_name" --description "Ubuntu 24.04 with Kubernetes tools and containerd" \
+            --no-reboot --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=ManagedBy,Value=GitHub-Actions}]" \
+            --query ImageId --output text)
+          aws ec2 wait image-available --region "$region" --image-ids "$ami_id"
+          echo "Created Kubernetes tools AMI: ${ami_id}"
+
+          if [ -n "$instance_id" ]; then
+              aws ec2 terminate-instances --region "$region" --instance-ids "$instance_id" >/dev/null || true
+              aws ec2 wait instance-terminated --region "$region" --instance-ids "$instance_id" || true
+          fi
+          aws ec2 delete-key-pair --region "$region" --key-name "$key_name" || true
+          aws ec2 delete-security-group --region "$region" --group-id "$security_group_id" || true
+          rm -f "$key_path"
