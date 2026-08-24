@@ -72,6 +72,15 @@ resource "aws_security_group" "allow_ssh" {
   })
 }
 
+resource "aws_security_group" "nginx_lb_sg" {
+  name        = "app-k8s-nginx-lb-sg"
+  description = "Allow public HTTP to the nginx load balancer"
+  vpc_id      = aws_vpc.public_vpc.id
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-nginx-lb-sg"
+  })
+}
+
 resource "aws_vpc_security_group_ingress_rule" "ssh_rule" {
   security_group_id = aws_security_group.allow_ssh.id
   cidr_ipv4         = "0.0.0.0/0"
@@ -115,6 +124,22 @@ resource "aws_vpc_security_group_ingress_rule" "worker-kubelet-rule" {
   referenced_security_group_id = aws_security_group.cp_sg.id
   from_port                    = 10250
   to_port                      = 10250
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "nginx_lb_http" {
+  security_group_id = aws_security_group.nginx_lb_sg.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "worker_nginx_nodeport" {
+  security_group_id            = aws_security_group.worker_node_sg.id
+  referenced_security_group_id = aws_security_group.nginx_lb_sg.id
+  from_port                    = 30080
+  to_port                      = 30080
   ip_protocol                  = "tcp"
 }
 
@@ -226,4 +251,52 @@ resource "aws_instance" "app-k8s-worker-2" {
   tags = merge(local.common_tags, {
     Name = "app-k8s-worker-2"
   })
+}
+
+resource "aws_lb" "nginx" {
+  name               = "app-k8s-nginx"
+  internal           = false
+  load_balancer_type = "network"
+  security_groups    = [aws_security_group.nginx_lb_sg.id]
+  subnets            = [aws_subnet.public_subnet.id]
+
+  tags = merge(local.common_tags, {
+    Name = "app-k8s-nginx"
+  })
+}
+
+resource "aws_lb_target_group" "nginx" {
+  name        = "app-k8s-nginx"
+  port        = 30080
+  protocol    = "TCP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.public_vpc.id
+
+  health_check {
+    protocol = "TCP"
+    port     = "traffic-port"
+  }
+}
+
+resource "aws_lb_target_group_attachment" "nginx_worker_1" {
+  target_group_arn = aws_lb_target_group.nginx.arn
+  target_id        = aws_instance.app-k8s-worker-1.id
+  port             = 30080
+}
+
+resource "aws_lb_target_group_attachment" "nginx_worker_2" {
+  target_group_arn = aws_lb_target_group.nginx.arn
+  target_id        = aws_instance.app-k8s-worker-2.id
+  port             = 30080
+}
+
+resource "aws_lb_listener" "nginx" {
+  load_balancer_arn = aws_lb.nginx.arn
+  port              = 80
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.nginx.arn
+  }
 }

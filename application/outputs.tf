@@ -32,3 +32,8 @@ output "k8s_worker_2_instance_public_ip" {
   description = "The public IP address of Kubernetes worker 2"
   value       = aws_instance.app-k8s-worker-2.public_ip
 }
+
+output "nginx_load_balancer_dns_name" {
+  description = "The public DNS name of the nginx Network Load Balancer"
+  value       = aws_lb.nginx.dns_name
+}
