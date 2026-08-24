@@ -184,6 +184,11 @@ resource "aws_vpc_security_group_egress_rule" "worker_egress" {
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
+resource "aws_vpc_security_group_egress_rule" "nginx_lb_egress" {
+  security_group_id = aws_security_group.nginx_lb_sg.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
 
 data "aws_ami" "k8s_tools" {
   most_recent = true
